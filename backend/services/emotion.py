@@ -3,75 +3,95 @@ emotion.py
 ----------
 Emotion detection service for Solace AI.
 
-Implements a rule-based classifier that maps user messages to one of
-four emotional states. The design is intentionally extensible — the
-keyword dictionaries can be expanded or replaced wholesale with an
-ML model (e.g., a transformer fine-tuned on SemEval emotion data).
-
-Supported emotions:
-    sad       → sadness / depression signals
-    anxious   → stress / anxiety signals
-    angry     → anger / frustration signals
-    happy     → joy / positive signals
-    neutral   → default when no match is found
+Replaces the rule-based keyword matcher with a HuggingFace text-classification 
+pipeline using the 'j-hartmann/emotion-english-distilroberta-base' model.
 """
 
-from typing import Dict, List
-from utils.helpers import normalise_text, contains_any_keyword
+import os
+from typing import Dict, Any, List, Union
+from transformers import pipeline
 
 # ---------------------------------------------------------------------------
-# Keyword vocabularies — order matters; first match wins
+# Globals and Model Loading
 # ---------------------------------------------------------------------------
 
-_EMOTION_KEYWORDS: Dict[str, List[str]] = {
-    "sad": [
-        "sad", "sadness", "depressed", "depression", "unhappy",
-        "cry", "crying", "tears", "hopeless", "miserable",
-        "heartbroken", "grief", "lonely", "alone", "empty",
-        "worthless", "numb", "broken",
-    ],
-    "anxious": [
-        "anxious", "anxiety", "stress", "stressed", "stressful",
-        "nervous", "panic", "panicking", "overwhelmed", "worried",
-        "worry", "fear", "fearful", "scared", "terrified",
-        "restless", "uneasy", "tense",
-    ],
-    "angry": [
-        "angry", "anger", "furious", "rage", "mad",
-        "frustrated", "frustration", "irritated", "annoyed",
-        "hate", "hatred", "disgusted", "outraged", "resentful",
-    ],
-    "happy": [
-        "happy", "happiness", "joyful", "joy", "excited",
-        "grateful", "thankful", "wonderful", "great", "amazing",
-        "fantastic", "elated", "content", "pleased", "cheerful",
-    ],
+# Label mapping to transform the model's 7 labels to the system's 5 labels
+LABEL_MAPPING = {
+    "sadness": "sad",
+    "joy": "happy",
+    "anger": "angry",
+    "fear": "anxious",
+    "surprise": "neutral",
+    "neutral": "neutral",
+    "disgust": "angry"
 }
 
-# Neutral is the fallback — no dedicated keywords needed
 _DEFAULT_EMOTION = "neutral"
 
+# Load the model globally so it isn't re-initialized on every request.
+# top_k=1 ensures we only get the highest confidence label.
+try:
+    print("[INFO] Loading Hugging Face text-classification pipeline...")
+    emotion_classifier = pipeline(
+        "text-classification",
+        model="j-hartmann/emotion-english-distilroberta-base",
+        top_k=1
+    )
+    print("[INFO] Emotion pipeline loaded successfully.")
+except Exception as e:
+    print(f"[ERROR] Failed to load emotion pipeline: {e}")
+    emotion_classifier = None
 
-def detect_emotion(text: str) -> str:
+
+def detect_emotion(text: str) -> Dict[str, Any]:
     """
-    Classify the dominant emotion expressed in *text*.
-
-    Iterates through emotion categories in priority order.
-    The first matching category is returned.
+    Classify the dominant emotion expressed in *text* using a HuggingFace Transformer.
 
     Args:
         text: The raw user input string.
 
     Returns:
-        One of: "sad", "anxious", "angry", "happy", "neutral".
-
-    Future ML integration:
-        return emotion_model.predict(text)  # drop-in replacement
+        dict: A dictionary containing:
+              - 'emotion': the mapped emotion string ("sad", "anxious", "angry", "happy", "neutral").
+              - 'confidence': a float between 0.0 and 1.0 representing model confidence.
     """
-    normalised = normalise_text(text)
+    # 1. Normalize input (strip whitespace, lowercase)
+    normalized_text = text.strip().lower()
 
-    for emotion, keywords in _EMOTION_KEYWORDS.items():
-        if contains_any_keyword(normalised, keywords):
-            return emotion
+    # Base case - if model failed to load or text is empty
+    if emotion_classifier is None or not normalized_text:
+        return {"emotion": _DEFAULT_EMOTION, "confidence": 0.0}
 
-    return _DEFAULT_EMOTION
+    try:
+        # 2. Run model classification
+        output: Union[List[Dict[str, Any]], List[List[Dict[str, Any]]]] = emotion_classifier(normalized_text)
+        
+        # 3. Handle model output safely (handle both single and list of lists formats)
+        prediction = None
+        if isinstance(output, list) and len(output) > 0:
+            if isinstance(output[0], list) and len(output[0]) > 0:
+                prediction = output[0][0]
+            elif isinstance(output[0], dict):
+                prediction = output[0]
+                
+        if prediction is not None:
+            raw_label = prediction.get("label", "neutral")
+            confidence = prediction.get("score", 0.0)
+        else:
+            raw_label = "neutral"
+            confidence = 0.0
+
+        # 4. Map the raw label to system label
+        mapped_emotion = LABEL_MAPPING.get(raw_label, _DEFAULT_EMOTION)
+        
+        # 5. Debug printing
+        print(f"[DEBUG] Emotion: {mapped_emotion}, Confidence: {confidence}")
+        
+        return {
+            "emotion": mapped_emotion,
+            "confidence": confidence
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Emotion classification failed: {e}")
+        return {"emotion": _DEFAULT_EMOTION, "confidence": 0.0}

@@ -78,7 +78,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         )
 
     # ── Step 3: Emotion detection ────────────────────────────────────────────
-    emotion = detect_emotion(user_message)
+    emotion_result = detect_emotion(user_message)
+    emotion = emotion_result.get("emotion", "neutral")
 
     # ── Step 4: Response generation ──────────────────────────────────────────
     reply = generate_response(emotion=emotion, text=user_message)

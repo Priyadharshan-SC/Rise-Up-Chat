@@ -3,109 +3,170 @@ response.py
 -----------
 Response generation service for Solace AI.
 
-Generates empathetic, emotion-aware replies. The current implementation
-uses a curated pool of hand-crafted responses per emotion with random
-selection to avoid repetition across turns.
-
-Future ML integration:
-    Replace `generate_response` with a call to an LLM API
-    (e.g., Gemini, GPT-4) that receives the emotion label and
-    conversation history for truly dynamic, personalised replies.
+Generates empathetic, emotion-aware, and context-aware replies using
+dynamic template combination and randomized choices to ensure human-like
+and non-repetitive conversational variation.
 """
 
 import random
-from typing import Dict, List
 
 # ---------------------------------------------------------------------------
-# Response pools — each emotion has multiple empathetic variants
+# Keywords for Context and Intent Detection
 # ---------------------------------------------------------------------------
+ACADEMIC_KEYWORDS = ["exam", "test", "marks", "failed", "result", "study", "grade", "school", "assignment"]
+RELATIONSHIP_KEYWORDS = ["love", "relationship", "breakup", "partner", "boyfriend", "girlfriend", "husband", "wife", "dating"]
+WORK_KEYWORDS = ["job", "work", "boss", "office", "manager", "career", "coworker", "colleague"]
+HELP_KEYWORDS = ["help", "what should i do", "how to", "get out", "advice", "stuck"]
 
-_RESPONSES: Dict[str, List[str]] = {
+# ---------------------------------------------------------------------------
+# Response Components
+# ---------------------------------------------------------------------------
+OPENERS = {
     "sad": [
-        "I'm really sorry you're feeling this way. 💙 It's okay to feel sad — "
-        "your feelings are completely valid. Would you like to talk more about what's going on?",
-
-        "Sadness can feel so heavy. You don't have to carry it alone. "
-        "I'm right here with you. What's been weighing on your heart lately?",
-
-        "It sounds like you're going through a tough time. "
-        "Please be gentle with yourself — healing takes time, and that's perfectly okay.",
-
-        "I hear you. Sometimes things feel overwhelming and that's alright. "
-        "Take it one small step at a time. I'm here if you want to share more.",
+        "I'm so sorry you're feeling this way.", 
+        "I hear you, and it sounds really heavy right now.", 
+        "Sending you a gentle hug. Things seem really tough."
     ],
     "anxious": [
-        "It sounds like you're under a lot of pressure right now. 🌿 "
-        "Take a slow, deep breath with me. In… and out. "
-        "Remember: you've gotten through hard moments before, and you can do it again.",
-
-        "Anxiety can make everything feel urgent and scary. "
-        "You're not alone in this. Let's slow down together — what's the biggest worry on your mind right now?",
-
-        "Feeling stressed is your mind's way of signalling that something matters to you. "
-        "That's okay. Let's try to break it down into smaller pieces — what feels most overwhelming?",
-
-        "I'm here for you. Anxiety is tough, but so are you. "
-        "Would grounding techniques or just talking it through help right now?",
+        "Take a slow, deep breath with me.", 
+        "It sounds like you have so much on your mind.", 
+        "I can feel how overwhelmed you are right now."
     ],
     "angry": [
-        "I can sense your frustration, and it's completely understandable. 🔥 "
-        "Your feelings are valid. Would you like to vent, or would you prefer some calming strategies?",
-
-        "It sounds like something really got under your skin. "
-        "Sometimes expressing anger is the first step to understanding it. What happened?",
-
-        "Anger often hides deeper feelings — hurt, disappointment, or fear. "
-        "Take your time. I'm listening without judgement.",
-
-        "You have every right to feel angry. Let it out safely here. "
-        "When you're ready, we can explore what's really driving these feelings together.",
+        "It is completely understandable that you are frustrated.", 
+        "I can sense how upset you are about this.", 
+        "You have every right to feel angry right now."
     ],
     "happy": [
-        "That's wonderful to hear! 🌟 I'm so glad you're feeling good. "
-        "Would you like to share what's been bringing you joy lately?",
-
-        "Your positive energy is contagious! 😊 "
-        "Celebrating the good moments is just as important as working through the hard ones.",
-
-        "It warms my heart to hear you're doing well! "
-        "What's been the highlight of your day?",
+        "That's wonderful to hear!", 
+        "Your positive energy is contagious!", 
+        "I love hearing that things are going well!"
     ],
     "neutral": [
-        "Thank you for sharing with me. 🌱 I'm here and fully present. "
-        "Feel free to share whatever is on your mind — big or small.",
-
-        "I appreciate you reaching out to Solace AI. "
-        "How are you feeling today? I'd love to understand what's going on for you.",
-
-        "I'm here to listen without judgement. "
-        "Whatever you'd like to talk about, we can explore it together.",
-
-        "Sometimes it helps just to put things into words. "
-        "Take all the time you need — I'm not going anywhere.",
-    ],
+        "Thank you for sharing that with me.", 
+        "I'm listening and I'm here for you.", 
+        "I appreciate you opening up about this."
+    ]
 }
 
-# Fallback for any unexpected emotion label
-_FALLBACK_RESPONSE = (
-    "Thank you for reaching out. 💚 I'm here to support you. "
-    "Can you tell me a little more about how you're feeling right now?"
-)
+VALIDATIONS = {
+    "sad": [
+        "It's okay to feel sad—your feelings are completely valid.", 
+        "Sadness can feel overwhelming, and you don't have to carry it alone.", 
+        "Please be gentle with yourself right now."
+    ],
+    "anxious": [
+        "Anxiety can make everything feel urgent and scary, but you are not alone.", 
+        "Feeling stressed is your mind's way of signalling that something matters to you.", 
+        "You've gotten through hard moments before, and you can do it again."
+    ],
+    "angry": [
+        "Sometimes expressing anger is the first step to understanding it.", 
+        "Anger often hides deeper feelings, and it's okay to let it out safely.", 
+        "Your frustration makes total sense."
+    ],
+    "happy": [
+        "Celebrating the good moments is just as important as working through the hard ones.", 
+        "It warms my heart to hear you're doing so well.", 
+        "It's so great to be able to cherish these joyful moments."
+    ],
+    "neutral": [
+        "Sometimes it helps just to put things into words.", 
+        "I'm here to listen without judgment.", 
+        "Whatever you'd like to talk about, we can explore it together."
+    ]
+}
 
+CONTEXT_LINES = {
+    "academic": [
+        "Academic struggles can be tough, but they don't define your ability or your future. You can learn from this and improve next time.",
+        "School can put an unimaginable amount of pressure on you, remember to take care of yourself first.",
+        "Exams and grades can be so stressful. It's important to recognize your hard work regardless of the outcome."
+    ],
+    "relationship": [
+        "Relationships are complex and can bring up a lot of intense emotions.",
+        "Navigating connection with others is rarely easy, and it takes time to process.",
+        "Heartbreak and relational stress can be deeply painful. Give yourself space to heal."
+    ],
+    "work": [
+        "Workplace stress can really take a toll on your overall well-being.",
+        "Balancing career demands is challenging, and it makes sense that it's affecting you.",
+        "Navigating office dynamics and job pressures is exhausting, please remember to disconnect when you can."
+    ]
+}
 
-def generate_response(emotion: str, text: str) -> str:  # noqa: ARG001
+SUGGESTIONS = [
+    "Could it help to break things down into smaller, more manageable steps?",
+    "Sometimes talking to a trusted friend or writing your thoughts in a journal can clear your mind.",
+    "Would it be helpful to take a small step back and focus on some self-care today?",
+    "Perhaps focusing on just getting through today is enough of a goal for now."
+]
+
+CLOSERS = [
+    "Would you like to talk more about what's going on?",
+    "I'm right here with you. What feels like the hardest part right now?",
+    "Take all the time you need. I'm listening.",
+    "How can I best support you through this?"
+]
+
+FALLBACK_RESPONSE = "I'm here to listen. Would you like to share more about what's going on?"
+
+def check_context(text: str) -> str:
+    """Returns the primary context matched, or None if no match is found."""
+    text_lower = text.lower()
+    
+    is_academic = any(word in text_lower for word in ACADEMIC_KEYWORDS)
+    if is_academic: return "academic"
+    
+    is_relationship = any(word in text_lower for word in RELATIONSHIP_KEYWORDS)
+    if is_relationship: return "relationship"
+    
+    is_work = any(word in text_lower for word in WORK_KEYWORDS)
+    if is_work: return "work"
+    
+    return None
+
+def check_help_intent(text: str) -> bool:
+    text_lower = text.lower()
+    return any(word in text_lower for word in HELP_KEYWORDS)
+
+def generate_response(emotion: str, text: str) -> str:
     """
-    Generate an empathetic reply based on the detected *emotion*.
-
-    The *text* parameter is accepted for forward-compatibility with
-    context-aware or ML-based response generators.
-
-    Args:
-        emotion: Emotion label returned by `detect_emotion`.
-        text:    The original user message (reserved for future use).
-
-    Returns:
-        A string containing the chatbot's empathetic reply.
+    Generate an empathetic reply dynamically based on detected emotion, 
+    situational context, and user intent.
     """
-    pool = _RESPONSES.get(emotion, [_FALLBACK_RESPONSE])
-    return random.choice(pool)
+    # Defensive programming: ensure emotion is standard
+    if emotion not in OPENERS:
+        emotion = "neutral"
+        
+    context = check_context(text)
+    wants_help = check_help_intent(text)
+    
+    components = []
+    
+    # 1. Opener
+    components.append(random.choice(OPENERS[emotion]))
+    
+    # 2. Validation
+    components.append(random.choice(VALIDATIONS[emotion]))
+    
+    # 3. Context-aware line
+    if context:
+        components.append(random.choice(CONTEXT_LINES[context]))
+        
+    # 4. Suggestion (if help intent and distressing emotion)
+    if wants_help and emotion in ["sad", "anxious", "angry"]:
+        components.append(random.choice(SUGGESTIONS))
+        
+    # 5. Closer
+    if emotion == "happy":
+        components.append("What's been the highlight for you?")
+    else:
+        components.append(random.choice(CLOSERS))
+        
+    reply = " ".join(components)
+    
+    if not reply.strip():
+        return FALLBACK_RESPONSE
+        
+    return reply

@@ -38,6 +38,27 @@ _CRISIS_KEYWORDS = [
     "not worth living",
 ]
 
+# High-risk phrases extracted from real-world distress datasets
+_CRISIS_PHRASES = [
+    "i'm done",
+    "im done",
+    "can't take this anymore",
+    "cant take this anymore",
+    "want to disappear",
+    "wanna disappear",
+    "end it all",
+    "crash my car",
+    "tired of living",
+    "hate my life",
+    "dont want to be here anymore",
+    "don't want to be here anymore",
+    "don't want to live",
+    "dont want to live",
+    "sick and tired of everything",
+    "want to go to sleep and never wake up",
+    "nothing to live for",
+]
+
 # Emergency response returned when a crisis keyword is detected
 EMERGENCY_RESPONSE = (
     "I'm really concerned about what you've shared. "
@@ -63,7 +84,10 @@ def check_safety(text: str) -> bool:
         False → message contains crisis-level content; trigger emergency flow.
     """
     normalised = normalise_text(text)
-    crisis_detected = contains_any_keyword(normalised, _CRISIS_KEYWORDS)
+    
+    # Check both keywords and multi-word phrases
+    crisis_detected = contains_any_keyword(normalised, _CRISIS_KEYWORDS) or \
+                      contains_any_keyword(normalised, _CRISIS_PHRASES)
 
     # Safe = no crisis keyword found
     return not crisis_detected
