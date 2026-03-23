@@ -1,42 +1,132 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Solace AI - Mental Wellness Companion</title>
-    <link rel="stylesheet" href="style.css">
-    <!-- Using Google Fonts for a clean, modern look -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Solace AI — Emotional Support</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,700;1,500&family=Nunito:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <div class="chat-container">
-        <!-- Header -->
-        <div class="chat-header">
-            <h2>Solace AI 💙</h2>
-            <p>Your empathetic mental wellness companion</p>
-        </div>
+<div class="shell">
 
-        <!-- Scrollable Messages Area -->
-        <div class="chat-messages" id="chat-messages">
-            <div class="message bot-message">
-                Hello! I'm Solace AI. I'm here to listen and support you. How are you feeling today?
-            </div>
-            <!-- Dynamic messages will be appended here -->
-        </div>
-
-        <!-- Input Area -->
-        <div class="chat-input-area">
-            <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
-            <button id="send-btn" disabled aria-label="Send Message">
-                <!-- Simple SVG Send Icon -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                </svg>
-            </button>
-        </div>
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-orb">🧘</div>
+      <div class="brand-name">Solace AI<em>Your safe space</em></div>
     </div>
-    
-    <script src="script.js"></script>
+
+    <div class="conn-status checking" id="connStatus">
+      <div class="conn-dot"></div>
+      <div class="conn-text" id="connText">Checking server…</div>
+      <button class="conn-retry" onclick="checkConnection()" title="Retry">↺</button>
+    </div>
+
+    <div class="sb-sep"></div>
+    <div class="sb-label">Chats</div>
+    <button class="sb-btn primary" onclick="createNewChat()"><span class="ico">✦</span> New Chat</button>
+
+    <!-- Dynamic chat session list -->
+    <div id="chatList" class="chat-list"></div>
+
+    <div class="sb-sep"></div>
+    <div class="sb-label">Settings</div>
+    <button class="sb-btn" id="themeBtn" onclick="toggleTheme()">
+      <span class="ico" id="themeIco">☀️</span>
+      <span id="themeLabel">Light Mode</span>
+    </button>
+
+    <div class="sb-sep"></div>
+    <div class="emo-legend">
+      <h4>Emotion Guide</h4>
+      <div class="emo-row">😊 <span>Happy / Joyful</span></div>
+      <div class="emo-row">😔 <span>Sad / Down</span></div>
+      <div class="emo-row">😣 <span>Stressed / Anxious</span></div>
+      <div class="emo-row">😡 <span>Angry / Frustrated</span></div>
+      <div class="emo-row">🚨 <span>Crisis — Needs Help</span></div>
+    </div>
+  </aside>
+
+  <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+
+  <!-- ═══ MAIN ═══ -->
+  <main class="main">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="hdr-left">
+        <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+        <div class="hdr-avatar">🧘</div>
+        <div class="hdr-info">
+          <div class="hdr-name" id="hdrTitle">Solace AI</div>
+          <div class="hdr-sub" id="hdrStatus">● Connecting…</div>
+        </div>
+      </div>
+      <div class="hdr-right">
+        <button class="hdr-btn" onclick="newChatFromHeader()" title="New chat">✦</button>
+        <button class="hdr-btn" onclick="toggleTheme()" id="hdrThemeBtn" title="Toggle theme">☀️</button>
+      </div>
+    </header>
+
+    <!-- Messages -->
+    <div class="msgs" id="msgs">
+      <div class="welcome" id="welcome">
+        <div class="welcome-orb">🫶</div>
+        <h2>How are you feeling today?</h2>
+        <p>I'm here to listen without judgment.<br/>Share anything — I'll support you through it.</p>
+        <div class="chips">
+          <button class="chip" onclick="useSuggestion(`I've been feeling really stressed lately`)">😣 I'm stressed</button>
+          <button class="chip" onclick="useSuggestion(`I feel sad and can't figure out why`)">😔 I feel sad</button>
+          <button class="chip" onclick="useSuggestion(`I'm actually feeling great today!`)">😊 I'm happy</button>
+          <button class="chip" onclick="useSuggestion(`I just need someone to talk to`)">💬 Just talk</button>
+          <button class="chip" onclick="useSuggestion(`I've been feeling really angry and don't know how to cope`)">😡 I'm angry</button>
+          <button class="chip" onclick="useSuggestion(`I'm completely overwhelmed and don't know what to do`)">🆘 Overwhelmed</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-area">
+      <div class="input-box">
+        <textarea id="inp" placeholder="Share what's on your mind…" rows="1" autocomplete="off" spellcheck="true"></textarea>
+        <div class="inp-actions">
+          <button class="act-btn" id="voiceBtn" onclick="toggleVoice()" title="Voice input">🎤</button>
+          <button id="sendBtn" onclick="sendMessage()" title="Send (Enter)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="char-hint" id="charHint"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Crisis Alert Panel (hidden by default) -->
+<div class="crisis-panel" id="crisisPanel" style="display:none">
+  <div class="crisis-inner">
+    <button class="crisis-close" onclick="closeCrisisPanel()">✕</button>
+    <div class="crisis-icon">🚨</div>
+    <h3>You are not alone.</h3>
+    <p>Help is available right now. Please reach out.</p>
+    <div class="crisis-actions">
+      <a class="crisis-btn call" href="tel:9152987821">📞 iCall: 9152987821</a>
+      <a class="crisis-btn call" href="tel:9820466627">📞 AASRA: 9820466627</a>
+      <a class="crisis-btn emergency" href="tel:108">🚑 Emergency: 108</a>
+      <button class="crisis-btn sos" id="sosBtn" onclick="triggerSOS()">🆘 Alert My Contact (SOS)</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/script.js"></script>
 </body>
 </html>

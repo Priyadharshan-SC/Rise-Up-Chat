@@ -3,35 +3,33 @@ chat.py
 -------
 Chat route for Solace AI.
 
-Defines the POST /chat endpoint. The request pipeline is:
-    1. Validate request body via ChatRequest schema.
-    2. Run safety check — if flagged, return emergency response immediately.
-    3. Detect emotion from the user message.
-    4. Generate an empathetic reply based on the emotion.
-    5. Persist the conversation turn to the database.
-    6. Return a structured ChatResponse JSON.
+Request pipeline:
+    1. Validate request body.
+    2. Resolve or create a chat session.
+    3. Safety check → if crisis, return emergency response immediately.
+    4. Detect emotion.
+    5. Classify risk level.
+    6. Smart routing: LLM (distress + confidence > 0.7 or help intent) else rule-based.
+    7. Persist conversation turn.
+    8. Return structured response.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
+from sqlalchemy.orm import Session
 
 from schemas.chat_schema import ChatRequest, ChatResponse
 from services.safety import check_safety, EMERGENCY_RESPONSE
 from services.emotion import detect_emotion
-from services.response import generate_response
-from database.db import save_conversation
-
-# ---------------------------------------------------------------------------
-# Router setup
-# ---------------------------------------------------------------------------
-
-router = APIRouter(
-    prefix="/chat",
-    tags=["Chat"],
+from services.response import generate_response, check_help_intent
+from services.llm import generate_llm_response
+from services.risk import classify_risk
+from database.db import (
+    get_db, create_chat, get_chat, update_chat_title,
+    save_conversation, get_recent_messages,
 )
 
-
 # ---------------------------------------------------------------------------
-# Endpoint
+router = APIRouter(prefix="/chat", tags=["Chat"])
 # ---------------------------------------------------------------------------
 
 @router.post(
@@ -39,58 +37,90 @@ router = APIRouter(
     response_model=ChatResponse,
     status_code=status.HTTP_200_OK,
     summary="Send a message to Solace AI",
-    description=(
-        "Accepts a user message, runs safety analysis, detects emotion, "
-        "and returns an empathetic AI response."
-    ),
 )
-async def chat(request: ChatRequest) -> ChatResponse:
-    """
-    Main chat endpoint.
-
-    Pipeline:
-        message → safety check → emotion detection → response generation → save → respond
-    """
+async def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     user_message = request.message.strip()
 
-    # ── Step 1: Empty message guard ──────────────────────────────────────────
     if not user_message:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Message cannot be empty.",
         )
 
-    # ── Step 2: Safety check ─────────────────────────────────────────────────
+    # ── Resolve / create chat session ─────────────────────────────────────────
+    if request.chat_id:
+        session = get_chat(db, request.chat_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Chat session not found.")
+    else:
+        # Auto-create a new session; title = first 50 chars of message
+        title = user_message[:50] + ("…" if len(user_message) > 50 else "")
+        session = create_chat(db, title=title)
+
+    chat_id = session.chat_id
+
+    # Update title from first real message if still default
+    if session.title == "New Chat":
+        update_chat_title(db, chat_id, user_message[:50])
+
+    # ── Safety check ──────────────────────────────────────────────────────────
     is_safe = check_safety(user_message)
 
     if not is_safe:
-        # Crisis detected — skip emotion detection and return emergency reply
         save_conversation(
-            user_message=user_message,
-            emotion="crisis",
-            reply=EMERGENCY_RESPONSE,
-            safe=False,
+            db=db, chat_id=chat_id, user_message=user_message,
+            emotion="crisis", confidence=1.0,
+            reply=EMERGENCY_RESPONSE, safe=False,
+            risk_level="crisis", response_source="rule_based",
         )
         return ChatResponse(
-            reply=EMERGENCY_RESPONSE,
-            emotion="crisis",
-            safe=False,
+            reply=EMERGENCY_RESPONSE, emotion="crisis",
+            safe=False, risk_level="crisis",
+            response_source="rule_based", chat_id=chat_id,
         )
 
-    # ── Step 3: Emotion detection ────────────────────────────────────────────
+    # ── Emotion detection ─────────────────────────────────────────────────────
     emotion_result = detect_emotion(user_message)
-    emotion = emotion_result.get("emotion", "neutral")
+    emotion        = emotion_result.get("emotion", "neutral")
+    confidence     = emotion_result.get("confidence", 0.0)
 
-    # ── Step 4: Response generation ──────────────────────────────────────────
-    reply = generate_response(emotion=emotion, text=user_message)
+    # ── Risk level ────────────────────────────────────────────────────────────
+    risk_level = classify_risk(user_message, emotion, confidence, is_safe)
 
-    # ── Step 5: Persist conversation turn ────────────────────────────────────
+    # ── Short-term memory (last 2 turns) ──────────────────────────────────────
+    recent_rows = get_recent_messages(db, chat_id, limit=2)
+    context = [
+        {"user": row.user_message, "bot": row.reply}
+        for row in recent_rows
+    ]
+
+    # ── Smart routing: LLM vs Rule-Based ─────────────────────────────────────
+    wants_help      = check_help_intent(user_message)
+    use_llm         = (emotion in ("sad", "anxious") and confidence > 0.7) or wants_help
+    reply           = None
+    response_source = "rule_based"
+
+    if use_llm:
+        print(f"[INFO] Routing to LLM  (emotion={emotion}, conf={confidence:.2f}, help={wants_help})")
+        reply = generate_llm_response(emotion=emotion, text=user_message, context=context)
+        if reply:
+            response_source = "llm"
+
+    if not reply:
+        print(f"[INFO] Routing to Rule-Based (emotion={emotion})")
+        reply = generate_response(emotion=emotion, text=user_message)
+        response_source = "rule_based"
+
+    # ── Persist ───────────────────────────────────────────────────────────────
     save_conversation(
-        user_message=user_message,
-        emotion=emotion,
-        reply=reply,
-        safe=True,
+        db=db, chat_id=chat_id, user_message=user_message,
+        emotion=emotion, confidence=confidence,
+        reply=reply, safe=True,
+        risk_level=risk_level, response_source=response_source,
     )
 
-    # ── Step 6: Return structured response ───────────────────────────────────
-    return ChatResponse(reply=reply, emotion=emotion, safe=True)
+    return ChatResponse(
+        reply=reply, emotion=emotion, safe=True,
+        risk_level=risk_level, response_source=response_source,
+        chat_id=chat_id,
+    )

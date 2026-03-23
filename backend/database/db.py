@@ -1,62 +1,147 @@
 """
 db.py
 -----
-Database stub for Solace AI.
+Database engine, session factory, and CRUD helpers for Solace AI.
 
-Currently uses an in-memory list to store conversation history.
-This module is structured to be easily replaced with a real database
-(e.g., PostgreSQL via SQLAlchemy, or MongoDB via Motor) in the future.
-
-Future ML integration: conversation history can be fed into an ML model
-for context-aware, personalised responses.
+Uses SQLite via SQLAlchemy. The DB file is created automatically at startup.
 """
 
+import uuid
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Optional, Dict, Any
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+
+from database.models import Base, Chat, Conversation
 
 # ---------------------------------------------------------------------------
-# In-memory conversation store (replace with DB adapter in production)
+# Engine & session
 # ---------------------------------------------------------------------------
 
-_conversation_log: List[Dict[str, Any]] = []
+DATABASE_URL = "sqlite:///./solace.db"
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},  # Required for SQLite + FastAPI
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def save_conversation(user_message: str, emotion: str, reply: str, safe: bool) -> Dict[str, Any]:
-    """
-    Persist a conversation turn to the in-memory store.
+def init_db() -> None:
+    """Create all tables if they don't exist yet."""
+    Base.metadata.create_all(bind=engine)
 
-    Args:
-        user_message: The original message sent by the user.
-        emotion:      The detected emotion label.
-        reply:        The chatbot's response.
-        safe:         Whether the message passed the safety check.
 
-    Returns:
-        The saved record as a dictionary.
-    """
-    record = {
-        "id": len(_conversation_log) + 1,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "user_message": user_message,
-        "emotion": emotion,
-        "reply": reply,
-        "safe": safe,
-    }
-    _conversation_log.append(record)
+def get_db() -> Session:
+    """Dependency: yields a DB session and closes it after the request."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Chat session CRUD
+# ---------------------------------------------------------------------------
+
+def create_chat(db: Session, title: str = "New Chat") -> Chat:
+    chat = Chat(chat_id=str(uuid.uuid4()), title=title, created_at=datetime.utcnow())
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
+    return chat
+
+
+def get_all_chats(db: Session) -> List[Chat]:
+    return db.query(Chat).order_by(Chat.created_at.desc()).all()
+
+
+def get_chat(db: Session, chat_id: str) -> Optional[Chat]:
+    return db.query(Chat).filter(Chat.chat_id == chat_id).first()
+
+
+def update_chat_title(db: Session, chat_id: str, title: str) -> None:
+    chat = get_chat(db, chat_id)
+    if chat:
+        chat.title = title[:60]   # cap title length
+        db.commit()
+
+
+def delete_chat(db: Session, chat_id: str) -> bool:
+    chat = get_chat(db, chat_id)
+    if not chat:
+        return False
+    db.delete(chat)
+    db.commit()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Conversation CRUD
+# ---------------------------------------------------------------------------
+
+def save_conversation(
+    db: Session,
+    chat_id: str,
+    user_message: str,
+    emotion: str,
+    confidence: float,
+    reply: str,
+    safe: bool,
+    risk_level: str = "low",
+    response_source: str = "rule_based",
+) -> Conversation:
+    record = Conversation(
+        chat_id=chat_id,
+        user_message=user_message,
+        emotion=emotion,
+        confidence=confidence,
+        reply=reply,
+        safe=safe,
+        risk_level=risk_level,
+        response_source=response_source,
+        sos_triggered=False,
+        timestamp=datetime.utcnow(),
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
     return record
 
 
-def get_all_conversations() -> List[Dict[str, Any]]:
-    """
-    Retrieve all stored conversation records.
+def get_recent_messages(db: Session, chat_id: str, limit: int = 2) -> List[Conversation]:
+    """Fetch the last *limit* turns from a chat (for short-term memory)."""
+    return (
+        db.query(Conversation)
+        .filter(Conversation.chat_id == chat_id)
+        .order_by(Conversation.timestamp.desc())
+        .limit(limit)
+        .all()
+    )[::-1]   # reverse so oldest-first
 
-    Returns:
-        A list of conversation record dictionaries.
-    """
-    return list(_conversation_log)
+
+def get_conversations(db: Session, chat_id: str) -> List[Conversation]:
+    return (
+        db.query(Conversation)
+        .filter(Conversation.chat_id == chat_id)
+        .order_by(Conversation.timestamp.asc())
+        .all()
+    )
 
 
-def clear_conversations() -> None:
-    """Clear all conversation history (useful for testing)."""
-    global _conversation_log
-    _conversation_log = []
+def trigger_sos(db: Session, chat_id: str) -> bool:
+    """Mark the latest conversation row in the chat as SOS triggered."""
+    record = (
+        db.query(Conversation)
+        .filter(Conversation.chat_id == chat_id)
+        .order_by(Conversation.timestamp.desc())
+        .first()
+    )
+    if not record:
+        return False
+    record.sos_triggered = True
+    db.commit()
+    return True
